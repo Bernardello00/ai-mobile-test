@@ -40,7 +40,7 @@ export default function Home() {
                 Scopri come funziona
               </a>
               <a className="rounded-2xl border border-white/15 px-6 py-4 text-center font-bold text-white transition hover:border-lagoon hover:text-lagoon" href="#cosa-creare">
-                Esplora i casi d'uso
+                Esplora i casi d&apos;uso
               </a>
             </div>
           </div>
@@ -89,7 +89,7 @@ export default function Home() {
       <section className="mx-auto max-w-7xl px-6 py-16 sm:px-8 lg:px-12" id="workflow">
         <div className="rounded-[2rem] border border-white/10 bg-gradient-to-br from-electric/35 to-lagoon/20 p-8 sm:p-12">
           <p className="font-bold uppercase tracking-[0.25em] text-lagoon">Workflow mobile-first</p>
-          <h2 className="mt-4 max-w-3xl text-4xl font-black sm:text-5xl">Priorità a gesture, velocità, accessibilità e contesto d'uso reale.</h2>
+          <h2 className="mt-4 max-w-3xl text-4xl font-black sm:text-5xl">Priorità a gesture, velocità, accessibilità e contesto d&apos;uso reale.</h2>
           <div className="mt-8 grid gap-4 md:grid-cols-3">
             {["Wireframe touch-first", "Prompt e automazioni", "Build, misura, itera"].map((item) => (
               <div className="rounded-2xl bg-ink/70 p-5" key={item}>
