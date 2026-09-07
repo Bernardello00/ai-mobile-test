@@ -6,30 +6,120 @@
     android:padding="10dp"
     android:background="#111318">
 
-    <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:text="Visual Video Scout · MVP" android:textColor="#FFFFFF" android:textSize="20sp" android:textStyle="bold" />
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Visual Video Scout · On-device"
+        android:textColor="#FFFFFF"
+        android:textSize="20sp"
+        android:textStyle="bold" />
 
-    <EditText android:id="@+id/urlInput" android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:hint="https://sito.example/video" android:inputType="textUri" android:singleLine="true"
-        android:textColor="#FFFFFF" android:textColorHint="#8A8F98" />
+    <TextView
+        android:id="@+id/modelText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="MobileCLIP S0 INT8 · inizializzazione…"
+        android:textColor="#9FE6B8"
+        android:textSize="12sp" />
 
-    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
-        <Button android:id="@+id/openButton" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Apri" />
-        <Button android:id="@+id/scanButton" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Scansiona" />
+    <EditText
+        android:id="@+id/urlInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="https://sito.example/video"
+        android:inputType="textUri"
+        android:singleLine="true"
+        android:textColor="#FFFFFF"
+        android:textColorHint="#8A8F98" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/openButton"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Apri" />
+
+        <Button
+            android:id="@+id/scanButton"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Scansiona sito" />
     </LinearLayout>
 
-    <EditText android:id="@+id/queryInput" android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:hint="es. uomo con maglietta rossa" android:singleLine="true"
-        android:textColor="#FFFFFF" android:textColorHint="#8A8F98" />
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
 
-    <EditText android:id="@+id/apiKeyInput" android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:hint="OpenAI API key (opzionale, resta nell’app)" android:singleLine="true"
-        android:inputType="textPassword" android:textColor="#FFFFFF" android:textColorHint="#8A8F98" />
+        <EditText
+            android:id="@+id/maxPagesInput"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:hint="Max pagine"
+            android:inputType="number"
+            android:singleLine="true"
+            android:text="10"
+            android:textColor="#FFFFFF"
+            android:textColorHint="#8A8F98" />
 
-    <Button android:id="@+id/searchButton" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Cerca visivamente" />
+        <EditText
+            android:id="@+id/maxCardsInput"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:hint="Card/pagina"
+            android:inputType="number"
+            android:singleLine="true"
+            android:text="80"
+            android:textColor="#FFFFFF"
+            android:textColorHint="#8A8F98" />
+    </LinearLayout>
 
-    <TextView android:id="@+id/statusText" android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:text="Apri un sito e avvia la scansione." android:textColor="#B7BBC5" android:textSize="13sp" android:maxLines="4" />
+    <EditText
+        android:id="@+id/queryInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="es. tizio con maglietta rossa"
+        android:singleLine="true"
+        android:textColor="#FFFFFF"
+        android:textColorHint="#8A8F98" />
 
-    <WebView android:id="@+id/webView" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" />
+    <Button
+        android:id="@+id/searchButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Cerca con MobileCLIP locale" />
+
+    <TextView
+        android:id="@+id/statusText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Apri un sito e avvia la scansione multipagina."
+        android:textColor="#B7BBC5"
+        android:textSize="13sp"
+        android:maxLines="6" />
+
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:fillViewport="false">
+        <LinearLayout
+            android:id="@+id/resultsContainer"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal" />
+    </HorizontalScrollView>
+
+    <WebView
+        android:id="@+id/webView"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
 </LinearLayout>
