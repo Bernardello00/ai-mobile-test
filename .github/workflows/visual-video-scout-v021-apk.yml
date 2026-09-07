@@ -1,0 +1,115 @@
+name: Build Visual Video Scout v0.2.1 APK
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/visual-video-scout-v021-apk.yml'
+  workflow_dispatch:
+
+jobs:
+  apk:
+    name: Build v0.2.1 ORT hotfix APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android 35 components
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+
+      - name: Apply v0.2.1 source hotfix
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed -i "s/versionCode 2/versionCode 3/" visual-video-scout/app/build.gradle
+          sed -i "s/versionName '0.2.0'/versionName '0.2.1'/" visual-video-scout/app/build.gradle
+          sed -i 's/mobileclip-vision-int8-fcbd153d.onnx/mobileclip-vision-fp32-17d3c037.onnx/' visual-video-scout/app/src/main/java/com/andrea/visualvideoscout/MobileClipEngine.java
+          sed -i 's/MobileCLIP S0 INT8/MobileCLIP S0 FP32-vision + INT8-text/g' visual-video-scout/app/src/main/java/com/andrea/visualvideoscout/MainActivity.java
+          rm -rf visual-video-scout/app/src/main/assets/models
+          mkdir -p visual-video-scout/app/src/main/assets/models
+
+      - name: Download pinned MobileCLIP S0 assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 4 --retry-delay 2 \
+            'https://huggingface.co/Xenova/mobileclip_s0/resolve/main/onnx/vision_model.onnx?download=true' \
+            -o visual-video-scout/app/src/main/assets/models/vision_model_uint8.onnx
+          curl --fail --location --retry 4 --retry-delay 2 \
+            'https://huggingface.co/Xenova/mobileclip_s0/resolve/main/onnx/text_model_int8.onnx?download=true' \
+            -o visual-video-scout/app/src/main/assets/models/text_model_int8.onnx
+          curl --fail --location --retry 4 --retry-delay 2 \
+            'https://huggingface.co/Xenova/mobileclip_s0/resolve/main/tokenizer.json?download=true' \
+            -o visual-video-scout/app/src/main/assets/models/tokenizer.json
+          echo '17d3c037b1d488c10c50e09f6009ea5a198caef4e0e8f4ea5617b7cb2d067ac0  visual-video-scout/app/src/main/assets/models/vision_model_uint8.onnx' | sha256sum -c -
+          echo 'fc8d87978623385c17a46331ffb9cb5ab7fe8b61c513c094602b85f08edd0a0b  visual-video-scout/app/src/main/assets/models/text_model_int8.onnx' | sha256sum -c -
+          test $(stat -c%s visual-video-scout/app/src/main/assets/models/tokenizer.json) -gt 2000000
+
+      - name: Validate graphs and CPU inference smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet 'onnx>=1.17,<2' 'onnxruntime>=1.23,<1.24' numpy
+          python - <<'PY'
+          import onnx, onnxruntime as ort, numpy as np
+          root='visual-video-scout/app/src/main/assets/models/'
+          vp=root+'vision_model_uint8.onnx'
+          tp=root+'text_model_int8.onnx'
+          vm=onnx.load(vp, load_external_data=False)
+          tm=onnx.load(tp, load_external_data=False)
+          onnx.checker.check_model(vm); onnx.checker.check_model(tm)
+          vops={n.op_type for n in vm.graph.node}
+          tops={n.op_type for n in tm.graph.node}
+          print('vision ops include ConvInteger:', 'ConvInteger' in vops)
+          print('text ops include MatMulInteger:', 'MatMulInteger' in tops)
+          assert 'ConvInteger' not in vops, 'FP32 vision graph unexpectedly contains ConvInteger'
+          vs=ort.InferenceSession(vp, providers=['CPUExecutionProvider'])
+          ts=ort.InferenceSession(tp, providers=['CPUExecutionProvider'])
+          vo=vs.run(None, {vs.get_inputs()[0].name: np.zeros((1,3,256,256), dtype=np.float32)})
+          to=ts.run(None, {ts.get_inputs()[0].name: np.zeros((1,77), dtype=np.int64)})
+          assert vo[0].shape == (1,512), vo[0].shape
+          assert to[0].shape == (1,512), to[0].shape
+          assert np.isfinite(vo[0]).all() and np.isfinite(to[0]).all()
+          print('CPU smoke PASS', vo[0].shape, to[0].shape)
+          PY
+
+      - name: Setup Gradle 8.11.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      - name: Build debug APK
+        run: gradle -p visual-video-scout :app:assembleDebug --stacktrace
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=visual-video-scout/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          $ANDROID_HOME/build-tools/35.0.0/aapt dump badging "$APK" | tee /tmp/badging.txt | head -25
+          grep -q "package: name='com.andrea.visualvideoscout'.*versionName='0.2.1'" /tmp/badging.txt
+          unzip -l "$APK" | grep -q 'assets/models/vision_model_uint8.onnx'
+          unzip -l "$APK" | grep -q 'assets/models/text_model_int8.onnx'
+          unzip -l "$APK" | grep -q 'assets/models/tokenizer.json'
+
+      - name: Rename APK
+        run: cp visual-video-scout/app/build/outputs/apk/debug/app-debug.apk VisualVideoScout-0.2.1-ondevice-ortfix.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: VisualVideoScout-0.2.1-OnDevice-ORTFix-APK
+          path: VisualVideoScout-0.2.1-ondevice-ortfix.apk
+          if-no-files-found: error
+          retention-days: 7
