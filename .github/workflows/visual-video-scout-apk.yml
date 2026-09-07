@@ -17,7 +17,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -28,6 +28,39 @@ jobs:
       - name: Install Android 35 components
         run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
 
+      - name: Download pinned MobileCLIP S0 INT8 assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p visual-video-scout/app/src/main/assets/models
+          curl --fail --location --retry 4 --retry-delay 2 \
+            'https://huggingface.co/Xenova/mobileclip_s0/resolve/main/onnx/vision_model_uint8.onnx?download=true' \
+            -o visual-video-scout/app/src/main/assets/models/vision_model_uint8.onnx
+          curl --fail --location --retry 4 --retry-delay 2 \
+            'https://huggingface.co/Xenova/mobileclip_s0/resolve/main/onnx/text_model_int8.onnx?download=true' \
+            -o visual-video-scout/app/src/main/assets/models/text_model_int8.onnx
+          curl --fail --location --retry 4 --retry-delay 2 \
+            'https://huggingface.co/Xenova/mobileclip_s0/resolve/main/tokenizer.json?download=true' \
+            -o visual-video-scout/app/src/main/assets/models/tokenizer.json
+          echo 'fcbd153d1aa1314fb72ea39b20c37e0572e7e7b05359b51f3efee5d682658472  visual-video-scout/app/src/main/assets/models/vision_model_uint8.onnx' | sha256sum -c -
+          echo 'fc8d87978623385c17a46331ffb9cb5ab7fe8b61c513c094602b85f08edd0a0b  visual-video-scout/app/src/main/assets/models/text_model_int8.onnx' | sha256sum -c -
+          test $(stat -c%s visual-video-scout/app/src/main/assets/models/tokenizer.json) -gt 2000000
+
+      - name: Inspect MobileCLIP ONNX graph contract
+        shell: bash
+        run: |
+          python -m pip install --quiet 'onnx>=1.17,<2'
+          python - <<'PY'
+          import onnx
+          for f in ['vision_model_uint8.onnx','text_model_int8.onnx']:
+              p='visual-video-scout/app/src/main/assets/models/'+f
+              m=onnx.load(p, load_external_data=False)
+              print('\n'+f)
+              print('inputs:', [(x.name,[d.dim_value or d.dim_param for d in x.type.tensor_type.shape.dim]) for x in m.graph.input])
+              print('outputs:', [(x.name,[d.dim_value or d.dim_param for d in x.type.tensor_type.shape.dim]) for x in m.graph.output])
+              onnx.checker.check_model(m)
+          PY
+
       - name: Setup Gradle 8.11.1
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -37,17 +70,24 @@ jobs:
         run: gradle -p visual-video-scout :app:assembleDebug --stacktrace
 
       - name: Verify APK
+        shell: bash
         run: |
-          test -s visual-video-scout/app/build/outputs/apk/debug/app-debug.apk
-          $ANDROID_HOME/build-tools/35.0.0/aapt dump badging visual-video-scout/app/build/outputs/apk/debug/app-debug.apk | head -20
+          set -euo pipefail
+          APK=visual-video-scout/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          $ANDROID_HOME/build-tools/35.0.0/aapt dump badging "$APK" | tee /tmp/badging.txt | head -25
+          grep -q "package: name='com.andrea.visualvideoscout'.*versionName='0.2.0'" /tmp/badging.txt
+          unzip -l "$APK" | grep -q 'assets/models/vision_model_uint8.onnx'
+          unzip -l "$APK" | grep -q 'assets/models/text_model_int8.onnx'
+          unzip -l "$APK" | grep -q 'assets/models/tokenizer.json'
 
       - name: Rename APK
-        run: cp visual-video-scout/app/build/outputs/apk/debug/app-debug.apk VisualVideoScout-0.1.0.apk
+        run: cp visual-video-scout/app/build/outputs/apk/debug/app-debug.apk VisualVideoScout-0.2.0-ondevice.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: VisualVideoScout-APK
-          path: VisualVideoScout-0.1.0.apk
+          name: VisualVideoScout-0.2.0-OnDevice-APK
+          path: VisualVideoScout-0.2.0-ondevice.apk
           if-no-files-found: error
           retention-days: 7
