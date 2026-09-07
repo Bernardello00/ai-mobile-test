@@ -22,36 +22,44 @@ import ai.onnxruntime.OrtSession;
 import ai.onnxruntime.TensorInfo;
 
 final class MobileClipEngine implements AutoCloseable {
-    private static final String VISION_ASSET = "models/vision_model_uint8.onnx";
-    private static final String TEXT_ASSET = "models/text_model_int8.onnx";
+    private static final String VISION_ASSET = "models/vision_model.onnx";
+    private static final String TEXT_ASSET = "models/text_model.onnx";
     private static final String TOKENIZER_ASSET = "models/tokenizer.json";
     private static final int IMAGE_SIZE = 256;
 
+    private final Context context;
     private final OrtEnvironment env;
-    private final OrtSession visionSession;
-    private final OrtSession textSession;
     private final OrtSession.SessionOptions sessionOptions;
     private final ClipTokenizer tokenizer;
+    private final File visionFile;
+    private final File textFile;
+    private OrtSession visionSession;
+    private OrtSession textSession;
+    private boolean closed;
 
     MobileClipEngine(Context context) throws Exception {
+        this.context = context.getApplicationContext();
         env = OrtEnvironment.getEnvironment();
         sessionOptions = new OrtSession.SessionOptions();
         sessionOptions.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
-        sessionOptions.setIntraOpNumThreads(Math.max(2, Math.min(6, Runtime.getRuntime().availableProcessors())));
+        sessionOptions.setIntraOpNumThreads(Math.max(1, Math.min(3, Runtime.getRuntime().availableProcessors())));
         sessionOptions.setInterOpNumThreads(1);
 
-        File visionFile = materializeAsset(context, VISION_ASSET, "mobileclip-vision-int8-fcbd153d.onnx");
-        File textFile = materializeAsset(context, TEXT_ASSET, "mobileclip-text-int8-fc8d8797.onnx");
-        visionSession = env.createSession(visionFile.getAbsolutePath(), sessionOptions);
-        textSession = env.createSession(textFile.getAbsolutePath(), sessionOptions);
-        tokenizer = new ClipTokenizer(readTextAsset(context, TOKENIZER_ASSET));
+        visionFile = materializeAsset(this.context, VISION_ASSET, "mobileclip-s0-vision-fp32-v022.onnx");
+        textFile = materializeAsset(this.context, TEXT_ASSET, "mobileclip-s0-text-fp32-v022.onnx");
+        tokenizer = new ClipTokenizer(readTextAsset(this.context, TOKENIZER_ASSET));
+
+        // Load ONLY the vision encoder at startup. The text encoder is much larger and
+        // is loaded lazily for search after the vision session has been released.
+        ensureVisionSession();
     }
 
-    float[] embedImage(Bitmap source) throws Exception {
+    synchronized float[] embedImage(Bitmap source) throws Exception {
+        OrtSession session = ensureVisionSession();
         float[] data = preprocess(source);
         Map<String, OnnxTensor> inputs = new HashMap<>();
         try {
-            for (Map.Entry<String, NodeInfo> entry : visionSession.getInputInfo().entrySet()) {
+            for (Map.Entry<String, NodeInfo> entry : session.getInputInfo().entrySet()) {
                 String name = entry.getKey();
                 TensorInfo info = (TensorInfo) entry.getValue().getInfo();
                 if (name.toLowerCase().contains("pixel")) {
@@ -60,20 +68,21 @@ final class MobileClipEngine implements AutoCloseable {
                     throw new IllegalStateException("Input vision non supportato: " + name + " " + info);
                 }
             }
-            try (OrtSession.Result result = visionSession.run(inputs)) {
-                return normalize(extractEmbedding(visionSession, result));
+            try (OrtSession.Result result = session.run(inputs)) {
+                return normalize(extractEmbedding(session, result));
             }
         } finally {
             for (OnnxTensor tensor : inputs.values()) tensor.close();
         }
     }
 
-    float[] embedText(String query) throws Exception {
+    synchronized float[] embedText(String query) throws Exception {
+        OrtSession session = ensureTextSession();
         String prompt = normalizeItalianVisualPrompt(query);
         ClipTokenizer.Encoding encoding = tokenizer.encode(prompt);
         Map<String, OnnxTensor> inputs = new HashMap<>();
         try {
-            for (Map.Entry<String, NodeInfo> entry : textSession.getInputInfo().entrySet()) {
+            for (Map.Entry<String, NodeInfo> entry : session.getInputInfo().entrySet()) {
                 String name = entry.getKey();
                 String lower = name.toLowerCase();
                 TensorInfo info = (TensorInfo) entry.getValue().getInfo();
@@ -88,12 +97,56 @@ final class MobileClipEngine implements AutoCloseable {
                     throw new IllegalStateException("Input text non supportato: " + name + " " + info);
                 }
             }
-            try (OrtSession.Result result = textSession.run(inputs)) {
-                return normalize(extractEmbedding(textSession, result));
+            try (OrtSession.Result result = session.run(inputs)) {
+                return normalize(extractEmbedding(session, result));
             }
         } finally {
             for (OnnxTensor tensor : inputs.values()) tensor.close();
         }
+    }
+
+    synchronized void prepareVision() throws Exception {
+        ensureVisionSession();
+    }
+
+    synchronized String activeEncoder() {
+        if (visionSession != null) return "vision";
+        if (textSession != null) return "text";
+        return "none";
+    }
+
+    private OrtSession ensureVisionSession() throws Exception {
+        checkOpen();
+        if (visionSession != null) return visionSession;
+        closeTextSession();
+        visionSession = env.createSession(visionFile.getAbsolutePath(), sessionOptions);
+        return visionSession;
+    }
+
+    private OrtSession ensureTextSession() throws Exception {
+        checkOpen();
+        if (textSession != null) return textSession;
+        closeVisionSession();
+        textSession = env.createSession(textFile.getAbsolutePath(), sessionOptions);
+        return textSession;
+    }
+
+    private void closeVisionSession() throws Exception {
+        if (visionSession != null) {
+            visionSession.close();
+            visionSession = null;
+        }
+    }
+
+    private void closeTextSession() throws Exception {
+        if (textSession != null) {
+            textSession.close();
+            textSession = null;
+        }
+    }
+
+    private void checkOpen() {
+        if (closed) throw new IllegalStateException("MobileCLIP engine chiuso");
     }
 
     private float[] extractEmbedding(OrtSession session, OrtSession.Result result) throws Exception {
@@ -212,9 +265,11 @@ final class MobileClipEngine implements AutoCloseable {
         }
     }
 
-    @Override public void close() throws Exception {
-        visionSession.close();
-        textSession.close();
+    @Override public synchronized void close() throws Exception {
+        if (closed) return;
+        closed = true;
+        closeVisionSession();
+        closeTextSession();
         sessionOptions.close();
     }
 }
