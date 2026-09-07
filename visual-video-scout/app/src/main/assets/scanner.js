@@ -1,5 +1,17 @@
-(() => {
-  const abs = (u) => { try { return new URL(u, location.href).href; } catch { return ''; } };
+(async () => {
+  const SESSION = Number(window.__VVS_SESSION || 0);
+  const PAGE = Number(window.__VVS_PAGE || 0);
+  const MAX_CARDS = Math.max(10, Math.min(250, Number(window.__VVS_MAX_CARDS || 80)));
+  const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+  const abs = (u) => { try { return u ? new URL(u, location.href).href : ''; } catch { return ''; } };
+  const canonical = (u) => { try { const x = new URL(u, location.href); x.hash=''; return x.href.replace(/\/$/, ''); } catch { return ''; } };
+  const visible = (el) => {
+    try {
+      const r = el.getBoundingClientRect();
+      const s = getComputedStyle(el);
+      return r.width >= 2 && r.height >= 2 && s.display !== 'none' && s.visibility !== 'hidden' && Number(s.opacity || 1) > 0.02;
+    } catch { return false; }
+  };
   const bgUrl = (el) => {
     try {
       const bg = getComputedStyle(el).backgroundImage || '';
@@ -7,47 +19,234 @@
       return m ? abs(m[1]) : '';
     } catch { return ''; }
   };
+  const hrefFor = (el) => {
+    const a = el.closest?.('a[href]') || el.querySelector?.('a[href]');
+    return a ? abs(a.href) : location.href;
+  };
+  const visualFor = (el) => {
+    const img = el.matches?.('img') ? el : el.querySelector?.('img');
+    const video = el.matches?.('video') ? el : el.querySelector?.('video');
+    let imageUrl = '';
+    let previewUrl = '';
+    if (img) imageUrl = abs(img.currentSrc || img.src || '');
+    if (video) {
+      imageUrl = abs(video.poster || '') || imageUrl;
+      previewUrl = abs(video.currentSrc || video.src || video.querySelector?.('source')?.src || '');
+    }
+    if (!imageUrl) imageUrl = bgUrl(el);
+    if (!imageUrl) {
+      const bgChild = [...(el.querySelectorAll?.('*') || [])].slice(0, 16).find(x => bgUrl(x));
+      if (bgChild) imageUrl = bgUrl(bgChild);
+    }
+    return { imageUrl, previewUrl };
+  };
+
   const seen = new Map();
   const collect = () => {
-    const nodes = [...document.querySelectorAll('img,video,[style*="background"],a')];
-    nodes.forEach((el, idx) => {
-      const r = el.getBoundingClientRect();
-      if (r.width < 100 || r.height < 70) return;
-      const img = el.tagName === 'IMG' ? abs(el.currentSrc || el.src || '') : '';
-      const poster = el.tagName === 'VIDEO' ? abs(el.poster || '') : '';
-      const preview = el.tagName === 'VIDEO' ? abs(el.currentSrc || el.src || '') : '';
-      const bg = bgUrl(el);
-      const visual = img || poster || bg;
-      if (!visual && !preview) return;
-      let a = el.closest('a[href]');
-      const href = a ? abs(a.href) : location.href;
-      const key = href + '|' + visual + '|' + preview;
+    const nodes = [...document.querySelectorAll('img,video,[style*="background-image"],[style*="background"]')];
+    for (const el of nodes) {
+      let r;
+      try { r = el.getBoundingClientRect(); } catch { continue; }
+      if (r.width < 100 || r.height < 65) continue;
+      const {imageUrl, previewUrl} = visualFor(el);
+      if (!imageUrl && !previewUrl) continue;
+      const href = hrefFor(el);
+      const key = `${href}|${imageUrl}|${previewUrl}`;
       if (!seen.has(key)) seen.set(key, {
-        id: idx, href, imageUrl: visual, previewUrl: preview,
-        width: Math.round(r.width), height: Math.round(r.height),
-        x: Math.round(r.left), y: Math.round(r.top)
+        id: key.slice(0, 220), href, sourceUrl: location.href,
+        imageUrl, previewUrl,
+        width: Math.round(r.width), height: Math.round(r.height)
       });
-    });
+    }
     return [...seen.values()];
   };
 
-  const candidates = [...document.querySelectorAll('a,article,li,div')]
-    .filter(el => { const r = el.getBoundingClientRect(); return r.width >= 160 && r.height >= 90 && r.width <= innerWidth * 1.1; })
-    .slice(0, 180);
-
-  collect();
-  let i = 0;
-  const step = () => {
-    if (i >= candidates.length) {
-      setTimeout(() => AndroidScanner.onScanResults(JSON.stringify({url: location.href, items: collect()})), 650);
-      return;
+  const scrollThroughPage = async () => {
+    let stable = 0;
+    let previousHeight = 0;
+    for (let i = 0; i < 42; i++) {
+      const h = Math.max(document.body?.scrollHeight || 0, document.documentElement?.scrollHeight || 0);
+      const y = Math.min(h, Math.round((i + 1) * innerHeight * 0.82));
+      window.scrollTo({top: y, behavior: 'instant'});
+      await sleep(110);
+      const h2 = Math.max(document.body?.scrollHeight || 0, document.documentElement?.scrollHeight || 0);
+      if (h2 === previousHeight && scrollY + innerHeight >= h2 - 8) stable++; else stable = 0;
+      previousHeight = h2;
+      collect();
+      if (stable >= 3) break;
     }
-    const el = candidates[i++];
-    try {
-      ['mouseenter','mouseover','mousemove'].forEach(type => el.dispatchEvent(new MouseEvent(type, {bubbles:true, view:window})));
-      el.scrollIntoView({block:'center', behavior:'instant'});
-    } catch (_) {}
-    setTimeout(() => { collect(); step(); }, 90);
+    window.scrollTo({top: Math.max(0, (document.documentElement?.scrollHeight || 0) - innerHeight), behavior: 'instant'});
+    await sleep(180);
   };
-  step();
+
+  const cardRoot = (visual) => {
+    const linked = visual.closest?.('a[href]');
+    if (linked) return linked;
+    let node = visual;
+    for (let depth = 0; depth < 5 && node?.parentElement; depth++, node = node.parentElement) {
+      const p = node.parentElement;
+      const r = p.getBoundingClientRect();
+      if (r.width >= 140 && r.height >= 80 && r.width <= innerWidth * 1.08 && r.height <= innerHeight * 1.4) {
+        if (p.matches('article,li,[role="listitem"],figure') || p.querySelector('a[href],video')) return p;
+      }
+    }
+    return visual;
+  };
+
+  const discoverCards = () => {
+    const visualNodes = [...document.querySelectorAll('img,video')].filter(el => {
+      try { const r = el.getBoundingClientRect(); return r.width >= 120 && r.height >= 70; } catch { return false; }
+    });
+    const roots = [];
+    const keys = new Set();
+    for (const visual of visualNodes) {
+      const root = cardRoot(visual);
+      if (!root || !visible(root)) continue;
+      const r = root.getBoundingClientRect();
+      const href = hrefFor(root);
+      const key = href !== location.href ? href : `${Math.round(r.left)}:${Math.round(r.top + scrollY)}:${Math.round(r.width)}:${Math.round(r.height)}`;
+      if (keys.has(key)) continue;
+      keys.add(key);
+      roots.push(root);
+    }
+    roots.sort((a,b) => (a.getBoundingClientRect().top + scrollY) - (b.getBoundingClientRect().top + scrollY));
+    return roots.slice(0, MAX_CARDS);
+  };
+
+  const emitFrame = (el, id, stage) => {
+    try {
+      const r = el.getBoundingClientRect();
+      if (r.bottom < 0 || r.top > innerHeight || r.right < 0 || r.left > innerWidth) return;
+      const {imageUrl, previewUrl} = visualFor(el);
+      AndroidScanner.onVisualFrame(JSON.stringify({
+        session: SESSION, page: PAGE, id, stage,
+        sourceUrl: location.href, href: hrefFor(el), imageUrl, previewUrl,
+        x: r.left, y: r.top, width: r.width, height: r.height,
+        viewportWidth: innerWidth, viewportHeight: innerHeight
+      }));
+    } catch (_) {}
+  };
+
+  const hoverCards = async (cards) => {
+    let index = 0;
+    for (const el of cards) {
+      const id = `p${PAGE}-c${index++}`;
+      try {
+        el.scrollIntoView({block: 'center', inline: 'nearest', behavior: 'instant'});
+        await sleep(70);
+        ['pointerenter','mouseenter','mouseover','mousemove'].forEach(type => {
+          const Ctor = type.startsWith('pointer') && window.PointerEvent ? PointerEvent : MouseEvent;
+          el.dispatchEvent(new Ctor(type, {bubbles:true, cancelable:true, view:window, pointerType:'mouse'}));
+        });
+      } catch (_) {}
+      await sleep(230);
+      collect();
+      emitFrame(el, id, 'hover-1');
+      let hasPreview = false;
+      try {
+        hasPreview = !!el.querySelector('video') || [...document.querySelectorAll('video')].some(v => {
+          const a=v.getBoundingClientRect(), b=el.getBoundingClientRect();
+          return a.right>b.left && a.left<b.right && a.bottom>b.top && a.top<b.bottom;
+        });
+      } catch (_) {}
+      if (hasPreview) {
+        await sleep(330);
+        collect();
+        emitFrame(el, id, 'hover-2');
+      }
+      try {
+        ['mouseout','mouseleave','pointerleave'].forEach(type => {
+          const Ctor = type.startsWith('pointer') && window.PointerEvent ? PointerEvent : MouseEvent;
+          el.dispatchEvent(new Ctor(type, {bubbles:true, cancelable:true, view:window, pointerType:'mouse'}));
+        });
+      } catch (_) {}
+      await sleep(45);
+    }
+  };
+
+  const currentPageNumber = () => {
+    const selectors = ['[aria-current="page"]','.pagination .active','.pager .active','.page-numbers.current','[class*="pagination"] [class*="active"]'];
+    for (const s of selectors) {
+      const el = document.querySelector(s);
+      const n = Number((el?.textContent || '').trim());
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+    return null;
+  };
+
+  const findNext = () => {
+    document.querySelectorAll('[data-vvs-next="1"]').forEach(el => el.removeAttribute('data-vvs-next'));
+    const controls = [...document.querySelectorAll('a[href],button,[role="button"]')].filter(el => {
+      if (!visible(el)) return false;
+      if (el.matches('[disabled],[aria-disabled="true"]')) return false;
+      return true;
+    });
+    const pageNo = currentPageNumber();
+    const docHeight = Math.max(document.body?.scrollHeight || 1, document.documentElement?.scrollHeight || 1);
+    let best = null;
+    let bestScore = -1e9;
+    for (const el of controls) {
+      const raw = `${el.textContent || ''} ${el.getAttribute('aria-label') || ''} ${el.getAttribute('title') || ''}`.trim();
+      const text = raw.toLowerCase().replace(/\s+/g,' ').trim();
+      const rel = (el.getAttribute('rel') || '').toLowerCase();
+      const parentHint = `${el.parentElement?.className || ''} ${el.parentElement?.id || ''} ${el.closest?.('nav')?.className || ''}`.toLowerCase();
+      const href = el.tagName === 'A' ? abs(el.href) : '';
+      const r = el.getBoundingClientRect();
+      const absoluteTop = r.top + scrollY;
+      let score = 0;
+      if (rel.split(/\s+/).includes('next')) score += 1200;
+      if (/^(next|next page|avanti|successiva|successivo|seguente|pagina successiva|older|più vecchi|›|»|→|>)$/.test(text)) score += 900;
+      if (/next|successiv|seguent|avanti/.test(text)) score += 500;
+      if (/pagination|paginator|pager|page-nav|page_numbers|page-numbers|nav-links/.test(parentHint)) score += 260;
+      if (absoluteTop > docHeight * 0.65) score += 100;
+      if (href) {
+        try { if (new URL(href).origin === location.origin) score += 70; else score -= 400; } catch { score -= 400; }
+        if (canonical(href) === canonical(location.href)) score -= 300;
+      }
+      const numeric = /^\d+$/.test(text) ? Number(text) : null;
+      if (numeric != null && pageNo != null) {
+        if (numeric === pageNo + 1) score += 750;
+        else if (numeric <= pageNo) score -= 500;
+        else score += Math.max(0, 200 - (numeric - pageNo) * 20);
+      }
+      if (text.length > 80) score -= 200;
+      if (score > bestScore) { bestScore = score; best = el; }
+    }
+    if (!best || bestScore < 350) return {nextUrl:'', hasNextClick:false};
+    best.setAttribute('data-vvs-next','1');
+    const href = best.tagName === 'A' ? abs(best.href) : '';
+    if (href && canonical(href) !== canonical(location.href)) return {nextUrl:href, hasNextClick:true};
+    return {nextUrl:'', hasNextClick:true};
+  };
+
+  const fingerprint = (items) => {
+    const seed = `${location.pathname}|${items.slice(0,40).map(x => `${x.href}|${x.imageUrl}`).join('||')}`;
+    let h = 2166136261 >>> 0;
+    for (let i=0;i<seed.length;i++) { h ^= seed.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+    return h.toString(16).padStart(8,'0');
+  };
+
+  try {
+    collect();
+    await scrollThroughPage();
+    const cards = discoverCards();
+    await hoverCards(cards);
+    await sleep(180);
+    const items = collect();
+    window.scrollTo({top: Math.max(0, (document.documentElement?.scrollHeight || 0) - innerHeight), behavior:'instant'});
+    await sleep(100);
+    const next = findNext();
+    AndroidScanner.onScanResults(JSON.stringify({
+      session: SESSION, page: PAGE, url: location.href, title: document.title,
+      fingerprint: fingerprint(items), cardsHovered: cards.length, items,
+      nextUrl: next.nextUrl, hasNextClick: next.hasNextClick
+    }));
+  } catch (error) {
+    AndroidScanner.onScanResults(JSON.stringify({
+      session: SESSION, page: PAGE, url: location.href,
+      fingerprint: `error-${PAGE}-${Date.now()}`, items: collect(),
+      nextUrl: '', hasNextClick: false,
+      error: String(error && error.message || error)
+    }));
+  }
 })();
