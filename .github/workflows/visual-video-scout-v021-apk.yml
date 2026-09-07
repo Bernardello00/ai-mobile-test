@@ -34,11 +34,12 @@ jobs:
           sed -i "s/versionCode 2/versionCode 3/" visual-video-scout/app/build.gradle
           sed -i "s/versionName '0.2.0'/versionName '0.2.1'/" visual-video-scout/app/build.gradle
           sed -i 's/mobileclip-vision-int8-fcbd153d.onnx/mobileclip-vision-fp32-17d3c037.onnx/' visual-video-scout/app/src/main/java/com/andrea/visualvideoscout/MobileClipEngine.java
-          sed -i 's/MobileCLIP S0 INT8/MobileCLIP S0 FP32-vision + INT8-text/g' visual-video-scout/app/src/main/java/com/andrea/visualvideoscout/MainActivity.java
+          sed -i 's/mobileclip-text-int8-fc8d8797.onnx/mobileclip-text-fp32-f6e9bd57.onnx/' visual-video-scout/app/src/main/java/com/andrea/visualvideoscout/MobileClipEngine.java
+          sed -i 's/MobileCLIP S0 INT8/MobileCLIP S0 FP32 · ON-DEVICE/g' visual-video-scout/app/src/main/java/com/andrea/visualvideoscout/MainActivity.java
           rm -rf visual-video-scout/app/src/main/assets/models
           mkdir -p visual-video-scout/app/src/main/assets/models
 
-      - name: Download pinned MobileCLIP S0 assets
+      - name: Download pinned MobileCLIP S0 FP32 assets
         shell: bash
         run: |
           set -euo pipefail
@@ -46,13 +47,13 @@ jobs:
             'https://huggingface.co/Xenova/mobileclip_s0/resolve/main/onnx/vision_model.onnx?download=true' \
             -o visual-video-scout/app/src/main/assets/models/vision_model_uint8.onnx
           curl --fail --location --retry 4 --retry-delay 2 \
-            'https://huggingface.co/Xenova/mobileclip_s0/resolve/main/onnx/text_model_int8.onnx?download=true' \
+            'https://huggingface.co/Xenova/mobileclip_s0/resolve/main/onnx/text_model.onnx?download=true' \
             -o visual-video-scout/app/src/main/assets/models/text_model_int8.onnx
           curl --fail --location --retry 4 --retry-delay 2 \
             'https://huggingface.co/Xenova/mobileclip_s0/resolve/main/tokenizer.json?download=true' \
             -o visual-video-scout/app/src/main/assets/models/tokenizer.json
           echo '17d3c037b1d488c10c50e09f6009ea5a198caef4e0e8f4ea5617b7cb2d067ac0  visual-video-scout/app/src/main/assets/models/vision_model_uint8.onnx' | sha256sum -c -
-          echo 'fc8d87978623385c17a46331ffb9cb5ab7fe8b61c513c094602b85f08edd0a0b  visual-video-scout/app/src/main/assets/models/text_model_int8.onnx' | sha256sum -c -
+          echo 'f6e9bd5742bfc515889e901634d8a2ff2a57fab8564e4ad3760e800b1a51b77c  visual-video-scout/app/src/main/assets/models/text_model_int8.onnx' | sha256sum -c -
           test $(stat -c%s visual-video-scout/app/src/main/assets/models/tokenizer.json) -gt 2000000
 
       - name: Validate graphs and CPU inference smoke test
@@ -70,9 +71,10 @@ jobs:
           onnx.checker.check_model(vm); onnx.checker.check_model(tm)
           vops={n.op_type for n in vm.graph.node}
           tops={n.op_type for n in tm.graph.node}
-          print('vision ops include ConvInteger:', 'ConvInteger' in vops)
-          print('text ops include MatMulInteger:', 'MatMulInteger' in tops)
-          assert 'ConvInteger' not in vops, 'FP32 vision graph unexpectedly contains ConvInteger'
+          print('vision ConvInteger:', 'ConvInteger' in vops)
+          print('text ConvInteger:', 'ConvInteger' in tops)
+          assert 'ConvInteger' not in vops
+          assert 'ConvInteger' not in tops
           vs=ort.InferenceSession(vp, providers=['CPUExecutionProvider'])
           ts=ort.InferenceSession(tp, providers=['CPUExecutionProvider'])
           vo=vs.run(None, {vs.get_inputs()[0].name: np.zeros((1,3,256,256), dtype=np.float32)})
