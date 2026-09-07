@@ -1,0 +1,116 @@
+name: Build Visual Video Scout v0.2.2 APK
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'visual-video-scout/**'
+      - '.github/workflows/visual-video-scout-v022-apk.yml'
+  workflow_dispatch:
+
+jobs:
+  apk:
+    name: Build v0.2.2 memory-pagination fix APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android 35 components
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+
+      - name: Download pinned MobileCLIP S0 FP32 assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf visual-video-scout/app/src/main/assets/models
+          mkdir -p visual-video-scout/app/src/main/assets/models
+          curl --fail --location --retry 4 --retry-delay 2 \
+            'https://huggingface.co/Xenova/mobileclip_s0/resolve/main/onnx/vision_model.onnx?download=true' \
+            -o visual-video-scout/app/src/main/assets/models/vision_model.onnx
+          curl --fail --location --retry 4 --retry-delay 2 \
+            'https://huggingface.co/Xenova/mobileclip_s0/resolve/main/onnx/text_model.onnx?download=true' \
+            -o visual-video-scout/app/src/main/assets/models/text_model.onnx
+          curl --fail --location --retry 4 --retry-delay 2 \
+            'https://huggingface.co/Xenova/mobileclip_s0/resolve/main/tokenizer.json?download=true' \
+            -o visual-video-scout/app/src/main/assets/models/tokenizer.json
+          echo '17d3c037b1d488c10c50e09f6009ea5a198caef4e0e8f4ea5617b7cb2d067ac0  visual-video-scout/app/src/main/assets/models/vision_model.onnx' | sha256sum -c -
+          echo 'f6e9bd5742bfc515889e901634d8a2ff2a57fab8564e4ad3760e800b1a51b77c  visual-video-scout/app/src/main/assets/models/text_model.onnx' | sha256sum -c -
+          test $(stat -c%s visual-video-scout/app/src/main/assets/models/tokenizer.json) -gt 2000000
+
+      - name: Validate ONNX graphs sequentially
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet 'onnx>=1.17,<2' 'onnxruntime>=1.23,<1.24' numpy psutil
+          python - <<'PY'
+          import gc, os, psutil, onnx, onnxruntime as ort, numpy as np
+          root='visual-video-scout/app/src/main/assets/models/'
+          vp=root+'vision_model.onnx'; tp=root+'text_model.onnx'
+          for p in (vp,tp):
+              m=onnx.load(p, load_external_data=False)
+              onnx.checker.check_model(m)
+              assert 'ConvInteger' not in {n.op_type for n in m.graph.node}, p
+          proc=psutil.Process(os.getpid())
+          vs=ort.InferenceSession(vp, providers=['CPUExecutionProvider'])
+          vo=vs.run(None,{vs.get_inputs()[0].name:np.zeros((1,3,256,256),dtype=np.float32)})
+          assert vo[0].shape==(1,512) and np.isfinite(vo[0]).all()
+          print('vision PASS rssMB', round(proc.memory_info().rss/1048576,1))
+          del vo,vs; gc.collect()
+          ts=ort.InferenceSession(tp, providers=['CPUExecutionProvider'])
+          to=ts.run(None,{ts.get_inputs()[0].name:np.zeros((1,77),dtype=np.int64)})
+          assert to[0].shape==(1,512) and np.isfinite(to[0]).all()
+          print('text PASS rssMB', round(proc.memory_info().rss/1048576,1))
+          PY
+
+      - name: Static crawler safety checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check visual-video-scout/app/src/main/assets/scanner.js
+          grep -q '__VVS_clickNextAndProbe' visual-video-scout/app/src/main/assets/scanner.js
+          grep -q 'getPendingInference' visual-video-scout/app/src/main/assets/scanner.js
+          grep -q 'newSingleThreadExecutor' visual-video-scout/app/src/main/java/com/andrea/visualvideoscout/MainActivity.java
+          grep -q 'ensureTextSession' visual-video-scout/app/src/main/java/com/andrea/visualvideoscout/MobileClipEngine.java
+          grep -q 'closeVisionSession' visual-video-scout/app/src/main/java/com/andrea/visualvideoscout/MobileClipEngine.java
+
+      - name: Setup Gradle 8.11.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      - name: Build debug APK
+        run: gradle -p visual-video-scout :app:assembleDebug --stacktrace
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=visual-video-scout/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          $ANDROID_HOME/build-tools/35.0.0/aapt dump badging "$APK" | tee /tmp/badging.txt | head -25
+          grep -q "package: name='com.andrea.visualvideoscout'.*versionName='0.2.2'" /tmp/badging.txt
+          unzip -l "$APK" | grep -q 'assets/models/vision_model.onnx'
+          unzip -l "$APK" | grep -q 'assets/models/text_model.onnx'
+          unzip -l "$APK" | grep -q 'assets/models/tokenizer.json'
+          $ANDROID_HOME/build-tools/35.0.0/apksigner verify --verbose "$APK"
+
+      - name: Rename APK
+        run: cp visual-video-scout/app/build/outputs/apk/debug/app-debug.apk VisualVideoScout-0.2.2-memory-pagination-fix.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: VisualVideoScout-0.2.2-Memory-Pagination-Fix-APK
+          path: VisualVideoScout-0.2.2-memory-pagination-fix.apk
+          if-no-files-found: error
+          retention-days: 7
